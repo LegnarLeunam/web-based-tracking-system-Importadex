@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Ban,
   BarChart3,
   Calendar,
   CheckCircle2,
@@ -19,6 +20,7 @@ import {
   MapPin,
   PackageCheck,
   PackageSearch,
+  Pencil,
   Plane,
   Plus,
   RefreshCw,
@@ -235,6 +237,29 @@ function getLocalDateTimeValue(date = new Date()) {
   return adjusted.toISOString().slice(0, 16);
 }
 
+function orderToForm(order) {
+  return {
+    type: order.type || "Exportación",
+    shipDate: getLocalDateTimeValue(new Date(order.shipDate || order.createdAt || Date.now())),
+    consignor: order.consignor || "",
+    recipient: order.recipient || "",
+    country: order.country || "",
+    office: order.office || "",
+    destinationAddress: order.destinationAddress || "",
+    pickupAddress: order.pickupAddress || defaultNewOrderForm.pickupAddress,
+    priority: order.priority || "Normal",
+    packages: order.packages || "1 paquete",
+    weight: order.weight || "",
+    content: order.content || "",
+    securityCode: order.securityCode || "",
+    evidenceUrl: order.evidenceUrl === "Pendiente de evidencia" ? "" : order.evidenceUrl || "",
+    tracking: order.tracking || "",
+    responsible: order.responsible || "Operaciones MIREX",
+    status: order.status || "Nueva solicitud",
+    internalComment: "",
+  };
+}
+
 function formatDate(value, options = {}) {
   if (!value || value === "Por definir" || value === "Pendiente de resolución") return value || "No disponible";
   return new Intl.DateTimeFormat("es-DO", {
@@ -354,11 +379,11 @@ function IconStat({ icon: Icon, label, value, detail, tone = "neutral" }) {
   );
 }
 
-function SelectField({ label, value, onChange, options }) {
+function SelectField({ disabled = false, label, value, onChange, options }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={option} value={option}>
             {option}
@@ -369,11 +394,12 @@ function SelectField({ label, value, onChange, options }) {
   );
 }
 
-function TextField({ label, value, onChange, placeholder = "", required = false, type = "text" }) {
+function TextField({ disabled = false, label, value, onChange, placeholder = "", required = false, type = "text" }) {
   return (
     <label className="field">
       <span>{label}</span>
       <input
+        disabled={disabled}
         type={type}
         value={value}
         required={required}
@@ -417,6 +443,9 @@ function App() {
     ...defaultNewOrderForm,
     shipDate: getLocalDateTimeValue(),
   }));
+  const [isEditOrderOpen, setIsEditOrderOpen] = useState(false);
+  const [editOrderForm, setEditOrderForm] = useState(defaultNewOrderForm);
+  const [orderPendingAnnul, setOrderPendingAnnul] = useState(null);
   const [authMode, setAuthMode] = useState("login");
   const [authMessage, setAuthMessage] = useState("");
   const [loginForm, setLoginForm] = useState({
@@ -441,6 +470,8 @@ function App() {
   const countryCatalog = catalogs.countries;
   const officeCatalog = catalogs.offices;
   const userCanMaintain = role === "Administrador";
+  const userCanEditOrders = ["Administrador", "Operaciones Importadex / Flypack"].includes(role);
+  const userCanAnnulOrders = role === "Administrador";
 
   const countries = useMemo(
     () => [
@@ -652,6 +683,7 @@ function App() {
   }
 
   function updateOrderStatus(orderId, status) {
+    if (!userCanEditOrders) return;
     const now = new Date().toISOString();
     setOrders((current) =>
       current.map((order) =>
@@ -676,6 +708,7 @@ function App() {
   }
 
   function saveTracking() {
+    if (!userCanEditOrders) return;
     const now = new Date().toISOString();
     setOrders((current) =>
       current.map((order) =>
@@ -744,6 +777,10 @@ function App() {
   }
 
   function simulateDhlLookup() {
+    if (!userCanEditOrders) {
+      setLookupMessage("Solo Administrador u Operaciones pueden consultar/actualizar tracking.");
+      return;
+    }
     // Integracion futura DHL API: reemplazar esta simulacion por consulta al endpoint de tracking DHL.
     const now = new Date().toISOString();
     const knownTracking = trackingDraft || selectedOrder.tracking;
@@ -888,6 +925,129 @@ function App() {
 
   function updateNewOrderForm(key, value) {
     setNewOrderForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function openEditOrderModal() {
+    if (!userCanEditOrders || !selectedOrder) return;
+    setEditOrderForm(orderToForm(selectedOrder));
+    setIsEditOrderOpen(true);
+  }
+
+  function updateEditOrderForm(key, value) {
+    setEditOrderForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function saveOrderEdits(event) {
+    event.preventDefault();
+    if (!userCanEditOrders) return;
+
+    const now = new Date().toISOString();
+    const shipDate = editOrderForm.shipDate
+      ? new Date(editOrderForm.shipDate).toISOString()
+      : selectedOrder.shipDate;
+    const updatedStatus = editOrderForm.status;
+    const updatedTracking = editOrderForm.tracking.trim();
+    const editNote = editOrderForm.internalComment.trim();
+
+    setOrders((current) =>
+      current.map((order) =>
+        order.id === selectedOrder.id
+          ? {
+              ...order,
+              securityCode: editOrderForm.securityCode.trim() || "Pendiente",
+              type: editOrderForm.type,
+              country: editOrderForm.country.trim(),
+              office: editOrderForm.office.trim(),
+              consignor: editOrderForm.consignor.trim(),
+              recipient: editOrderForm.recipient.trim(),
+              shipDate,
+              priority: editOrderForm.priority,
+              status: updatedStatus,
+              tracking: updatedTracking,
+              responsible: editOrderForm.responsible,
+              updatedAt: now,
+              destinationAddress: editOrderForm.destinationAddress.trim(),
+              pickupAddress: editOrderForm.pickupAddress.trim(),
+              packages: editOrderForm.packages.trim(),
+              weight: editOrderForm.weight.trim() || "Por definir",
+              content: editOrderForm.content.trim(),
+              evidenceUrl: editOrderForm.evidenceUrl.trim() || "Pendiente de evidencia",
+              comments: editNote
+                ? [
+                    ...order.comments,
+                    {
+                      author: role,
+                      text: editNote,
+                      date: now,
+                    },
+                  ]
+                : order.comments,
+              history: [
+                ...order.history,
+                {
+                  date: now,
+                  status: "Orden editada",
+                  source: role,
+                  note: editNote || "Datos generales actualizados desde el modal de edición.",
+                },
+              ],
+              trackingInfo: {
+                ...order.trackingInfo,
+                currentStatus: updatedTracking ? updatedStatus : "Sin guía generada",
+                lastLocation: editOrderForm.country.trim() || order.trackingInfo.lastLocation,
+              },
+            }
+          : order,
+      ),
+    );
+    setTrackingDraft(updatedTracking);
+    setLookupMessage("");
+    setIsEditOrderOpen(false);
+  }
+
+  function requestAnnulSelectedOrder() {
+    if (!userCanAnnulOrders || !selectedOrder || selectedOrder.status === "Cancelado") return;
+    setOrderPendingAnnul(selectedOrder);
+  }
+
+  function confirmAnnulOrder() {
+    if (!userCanAnnulOrders || !orderPendingAnnul) return;
+
+    const now = new Date().toISOString();
+    setOrders((current) =>
+      current.map((order) =>
+        order.id === orderPendingAnnul.id
+          ? {
+              ...order,
+              status: "Cancelado",
+              updatedAt: now,
+              comments: [
+                ...order.comments,
+                {
+                  author: role,
+                  text: "Orden anulada por el administrador. El registro se conserva para auditoría.",
+                  date: now,
+                },
+              ],
+              history: [
+                ...order.history,
+                {
+                  date: now,
+                  status: "Cancelado",
+                  source: role,
+                  note: "Orden anulada. No fue eliminada del sistema.",
+                },
+              ],
+              trackingInfo: {
+                ...order.trackingInfo,
+                currentStatus: "Cancelado",
+              },
+            }
+          : order,
+      ),
+    );
+    setLookupMessage("");
+    setOrderPendingAnnul(null);
   }
 
   function createOrder(event) {
@@ -1089,10 +1249,14 @@ function App() {
             orders={orders}
             query={query}
             selectedOrder={selectedOrder}
+            userCanAnnulOrders={userCanAnnulOrders}
+            userCanEditOrders={userCanEditOrders}
             trackingDraft={trackingDraft}
             lookupMessage={lookupMessage}
             newComment={newComment}
             onAddComment={addComment}
+            onAnnulOrder={requestAnnulSelectedOrder}
+            onEditOrder={openEditOrderModal}
             onQueryChange={setQuery}
             onResetFilters={() => setFilters(emptyFilters)}
             onSaveTracking={saveTracking}
@@ -1149,6 +1313,56 @@ function App() {
           onSubmit={createOrder}
         />
       ) : null}
+      {isEditOrderOpen ? (
+        <NewOrderModal
+          countryOptions={countryCatalog}
+          description="Actualiza los datos de la orden. Los cambios quedarán registrados en el historial."
+          form={editOrderForm}
+          officeOptions={officeCatalog}
+          statusOptions={statusOptions}
+          submitLabel="Guardar cambios"
+          title={`Editar orden ${selectedOrder.id}`}
+          onChange={updateEditOrderForm}
+          onClose={() => setIsEditOrderOpen(false)}
+          onSubmit={saveOrderEdits}
+        />
+      ) : null}
+      {orderPendingAnnul ? (
+        <ConfirmAnnulModal
+          order={orderPendingAnnul}
+          onCancel={() => setOrderPendingAnnul(null)}
+          onConfirm={confirmAnnulOrder}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ConfirmAnnulModal({ order, onCancel, onConfirm }) {
+  return (
+    <div className="modal-backdrop">
+      <section className="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="annul-title">
+        <div className="confirm-icon">
+          <Ban size={22} />
+        </div>
+        <div>
+          <span className="eyebrow">Anulación administrativa</span>
+          <h2 id="annul-title">Anular orden {order.id}</h2>
+          <p>
+            La orden cambiará a estado <strong>Cancelado</strong>, se conservará en el sistema y quedará
+            registrada en el historial para auditoría.
+          </p>
+        </div>
+        <footer className="confirm-actions">
+          <button className="ghost-button" onClick={onCancel}>
+            Cancelar
+          </button>
+          <button className="danger-action" onClick={onConfirm}>
+            <Ban size={16} />
+            Confirmar anulación
+          </button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -1496,9 +1710,12 @@ function CatalogManager({ icon: Icon, items, label, pluralLabel, value, onAdd, o
 
 function NewOrderModal({
   countryOptions,
+  description = "Registra la solicitud y deja lista la trazabilidad inicial para operaciones.",
   form,
   officeOptions,
   statusOptions,
+  submitLabel = "Crear orden",
+  title = "Nueva orden MIREX",
   onChange,
   onClose,
   onSubmit,
@@ -1509,10 +1726,8 @@ function NewOrderModal({
         <header className="modal-header">
           <div>
             <span className="eyebrow">Captura operativa</span>
-            <h2 id="new-order-title">Nueva orden MIREX</h2>
-            <p>
-              Registra la solicitud y deja lista la trazabilidad inicial para operaciones.
-            </p>
+            <h2 id="new-order-title">{title}</h2>
+            <p>{description}</p>
           </div>
           <button className="icon-button" type="button" title="Cerrar" onClick={onClose}>
             <X size={18} />
@@ -1687,7 +1902,7 @@ function NewOrderModal({
             </button>
             <button className="primary-action" type="submit">
               <FileText size={18} />
-              Crear orden
+              {submitLabel}
             </button>
           </footer>
         </form>
@@ -1704,10 +1919,14 @@ function OrdersView({
   query,
   selectedOrder,
   statusOptions,
+  userCanAnnulOrders,
+  userCanEditOrders,
   trackingDraft,
   lookupMessage,
   newComment,
   onAddComment,
+  onAnnulOrder,
+  onEditOrder,
   onQueryChange,
   onResetFilters,
   onSaveTracking,
@@ -1864,6 +2083,7 @@ function OrdersView({
                         value={order.status}
                         onChange={(event) => onUpdateStatus(order.id, event.target.value)}
                         onClick={(event) => event.stopPropagation()}
+                        disabled={!userCanEditOrders}
                       >
                         {statusOptions.map((status) => (
                           <option key={status} value={status}>
@@ -1887,8 +2107,12 @@ function OrdersView({
           newComment={newComment}
           order={selectedOrder}
           statusOptions={statusOptions}
+          userCanAnnulOrders={userCanAnnulOrders}
+          userCanEditOrders={userCanEditOrders}
           trackingDraft={trackingDraft}
           onAddComment={onAddComment}
+          onAnnulOrder={onAnnulOrder}
+          onEditOrder={onEditOrder}
           onSaveTracking={onSaveTracking}
           onSetNewComment={onSetNewComment}
           onSetTrackingDraft={onSetTrackingDraft}
@@ -1905,8 +2129,12 @@ function OrderDetail({
   newComment,
   order,
   statusOptions,
+  userCanAnnulOrders,
+  userCanEditOrders,
   trackingDraft,
   onAddComment,
+  onAnnulOrder,
+  onEditOrder,
   onSaveTracking,
   onSetNewComment,
   onSetTrackingDraft,
@@ -1939,22 +2167,45 @@ function OrderDetail({
       </div>
 
       <div className="detail-actions">
+        <div className="order-admin-actions">
+          {userCanEditOrders ? (
+            <button className="secondary-action" onClick={onEditOrder}>
+              <Pencil size={16} />
+              Editar orden
+            </button>
+          ) : null}
+          {userCanAnnulOrders ? (
+            <button
+              className="danger-action"
+              disabled={order.status === "Cancelado"}
+              onClick={onAnnulOrder}
+            >
+              <Ban size={16} />
+              Anular orden
+            </button>
+          ) : null}
+        </div>
         <SelectField
           label="Estado actual"
           value={order.status}
           options={statusOptions}
           onChange={(value) => onUpdateStatus(order.id, value)}
+          disabled={!userCanEditOrders}
         />
         <TextField
           label="Guía DHL / tracking"
           value={trackingDraft}
           placeholder="JD014600..."
           onChange={onSetTrackingDraft}
+          disabled={!userCanEditOrders}
         />
-        <button className="primary-action full" onClick={onSaveTracking}>
+        <button className="primary-action full" disabled={!userCanEditOrders} onClick={onSaveTracking}>
           <ShieldCheck size={18} />
           Guardar tracking
         </button>
+        {!userCanEditOrders ? (
+          <p className="permission-note">Solo Administrador u Operaciones pueden editar esta orden.</p>
+        ) : null}
       </div>
 
       <div className="detail-section">
@@ -2020,6 +2271,7 @@ function OrderDetail({
         dhlUrl={dhlUrl}
         lookupMessage={lookupMessage}
         order={order}
+        userCanEditOrders={userCanEditOrders}
         onSimulateLookup={onSimulateLookup}
       />
 
@@ -2071,7 +2323,7 @@ function InfoLine({ icon: Icon, label, value }) {
   );
 }
 
-function DhlTracking({ dhlUrl, lookupMessage, order, onSimulateLookup }) {
+function DhlTracking({ dhlUrl, lookupMessage, order, userCanEditOrders, onSimulateLookup }) {
   return (
     <div className="detail-section dhl-section">
       <h3>
@@ -2088,7 +2340,7 @@ function DhlTracking({ dhlUrl, lookupMessage, order, onSimulateLookup }) {
           Abrir DHL
         </a>
       </div>
-      <button className="secondary-action full" onClick={onSimulateLookup}>
+      <button className="secondary-action full" disabled={!userCanEditOrders} onClick={onSimulateLookup}>
         <RefreshCw size={16} />
         Consultar estatus
       </button>
