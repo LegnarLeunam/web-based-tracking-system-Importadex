@@ -19,4 +19,13 @@ npm run dev
 npm run build
 ```
 
+## Demo gratuito
+
+El proyecto esta preparado para publicarse con GitHub Pages mediante GitHub Actions.
+Cuando Pages este activo para este repositorio, el demo quedara disponible en:
+
+```text
+https://legnarleunam.github.io/web-based-tracking-system-Importadex/
+```
+
 El prototipo no requiere backend. Los puntos de integracion futura estan comentados en el codigo.
