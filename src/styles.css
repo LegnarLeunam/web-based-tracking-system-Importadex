@@ -851,6 +851,18 @@ h3 {
   line-height: 1.4;
 }
 
+.save-message {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #b8e3d7;
+  border-radius: 8px;
+  background: #ecfdf6;
+  color: #00615f;
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
 .detail-section h3 {
   display: flex;
   align-items: center;

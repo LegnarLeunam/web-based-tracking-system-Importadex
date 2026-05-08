@@ -111,6 +111,7 @@ const storageKeys = {
   users: "mirex-tracking-users",
   session: "mirex-tracking-session",
   catalogs: "mirex-tracking-catalogs",
+  orders: "mirex-tracking-orders",
 };
 
 const defaultNewOrderForm = {
@@ -429,14 +430,15 @@ function App() {
   const [catalogs, setCatalogs] = useState(() =>
     mergeCatalogs(readStorage(storageKeys.catalogs, defaultCatalogs)),
   );
-  const [orders, setOrders] = useState(appInitialOrders);
-  const [selectedOrderId, setSelectedOrderId] = useState(appInitialOrders[0].id);
+  const [orders, setOrders] = useState(() => readStorage(storageKeys.orders, appInitialOrders));
+  const [selectedOrderId, setSelectedOrderId] = useState(() => orders[0]?.id || appInitialOrders[0].id);
   const [activeView, setActiveView] = useState("orders");
   const [filters, setFilters] = useState(emptyFilters);
   const [reportFilters, setReportFilters] = useState(emptyReportFilters);
   const [query, setQuery] = useState("");
   const [newComment, setNewComment] = useState("");
-  const [trackingDraft, setTrackingDraft] = useState(appInitialOrders[0].tracking);
+  const [trackingDraft, setTrackingDraft] = useState(() => orders[0]?.tracking || "");
+  const [trackingSaveMessage, setTrackingSaveMessage] = useState("");
   const [lookupMessage, setLookupMessage] = useState("");
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [newOrderForm, setNewOrderForm] = useState(() => ({
@@ -507,6 +509,10 @@ function App() {
   useEffect(() => {
     writeStorage(storageKeys.catalogs, catalogs);
   }, [catalogs]);
+
+  useEffect(() => {
+    writeStorage(storageKeys.orders, orders);
+  }, [orders]);
 
   useEffect(() => {
     if (authUser) {
@@ -679,6 +685,7 @@ function App() {
   function selectOrder(order) {
     setSelectedOrderId(order.id);
     setTrackingDraft(order.tracking);
+    setTrackingSaveMessage("");
     setLookupMessage("");
   }
 
@@ -709,38 +716,72 @@ function App() {
 
   function saveTracking() {
     if (!userCanEditOrders) return;
+    const normalizedTracking = trackingDraft.trim();
+
+    if (!normalizedTracking) {
+      setTrackingSaveMessage("Ingresa un número de tracking antes de guardarlo.");
+      return;
+    }
+
+    if ((selectedOrder.tracking || "").trim() === normalizedTracking) {
+      setTrackingSaveMessage(`El tracking ${normalizedTracking} ya está guardado en esta orden.`);
+      return;
+    }
+
     const now = new Date().toISOString();
+    const selectedOrderForTracking = selectedOrder.id;
+    // DHL API / base de datos interna: en producción este guardado debe persistirse en backend.
     setOrders((current) =>
-      current.map((order) =>
-        order.id === selectedOrder.id
-          ? {
-              ...order,
-              tracking: trackingDraft,
-              updatedAt: now,
-              status: trackingDraft && order.status === "Pendiente de guía DHL"
+      current.map((order) => {
+        if (order.id !== selectedOrderForTracking) return order;
+
+        const previousTracking = order.tracking?.trim();
+        const shouldPromoteStatus =
+          !previousTracking &&
+          ["Nueva solicitud", "En revisión", "Pendiente de guía DHL"].includes(order.status);
+        const nextStatus = shouldPromoteStatus ? "Guía DHL generada" : order.status;
+
+        return {
+          ...order,
+          tracking: normalizedTracking,
+          updatedAt: now,
+          status: nextStatus,
+          trackingInfo: {
+            ...order.trackingInfo,
+            currentStatus:
+              order.trackingInfo.currentStatus === "Sin guía generada" || shouldPromoteStatus
                 ? "Guía DHL generada"
-                : order.status,
-              trackingInfo: {
-                ...order.trackingInfo,
-                currentStatus: trackingDraft
-                  ? order.trackingInfo.currentStatus === "Sin guía generada"
-                    ? "Guía DHL generada"
-                    : order.trackingInfo.currentStatus
-                  : "Sin guía generada",
+                : order.trackingInfo.currentStatus,
+            lastLocation:
+              order.trackingInfo.currentStatus === "Sin guía generada"
+                ? "Operaciones Importadex / Flypack"
+                : order.trackingInfo.lastLocation,
+            events: [
+              {
+                date: now,
+                location: "Operaciones Importadex / Flypack",
+                status: previousTracking ? "Tracking DHL actualizado" : "Guía DHL registrada",
               },
-              history: [
-                ...order.history,
-                {
-                  date: now,
-                  status: "Tracking DHL actualizado",
-                  source: "Operaciones MIREX",
-                  note: trackingDraft || "Tracking eliminado",
-                },
-              ],
-            }
-          : order,
-      ),
+              ...order.trackingInfo.events,
+            ],
+          },
+          history: [
+            ...order.history,
+            {
+              date: now,
+              status: previousTracking ? "Tracking DHL actualizado" : "Guía DHL agregada",
+              source: role,
+              note: previousTracking
+                ? `Tracking ${previousTracking} reemplazado por ${normalizedTracking}.`
+                : `Tracking DHL ${normalizedTracking} agregado a la orden.`,
+            },
+          ],
+        };
+      }),
     );
+    setTrackingDraft(normalizedTracking);
+    setTrackingSaveMessage(`Tracking ${normalizedTracking} guardado en la orden ${selectedOrder.id}.`);
+    setLookupMessage("");
   }
 
   function addComment() {
@@ -1252,6 +1293,7 @@ function App() {
             userCanAnnulOrders={userCanAnnulOrders}
             userCanEditOrders={userCanEditOrders}
             trackingDraft={trackingDraft}
+            trackingSaveMessage={trackingSaveMessage}
             lookupMessage={lookupMessage}
             newComment={newComment}
             onAddComment={addComment}
@@ -1922,6 +1964,7 @@ function OrdersView({
   userCanAnnulOrders,
   userCanEditOrders,
   trackingDraft,
+  trackingSaveMessage,
   lookupMessage,
   newComment,
   onAddComment,
@@ -2110,6 +2153,7 @@ function OrdersView({
           userCanAnnulOrders={userCanAnnulOrders}
           userCanEditOrders={userCanEditOrders}
           trackingDraft={trackingDraft}
+          trackingSaveMessage={trackingSaveMessage}
           onAddComment={onAddComment}
           onAnnulOrder={onAnnulOrder}
           onEditOrder={onEditOrder}
@@ -2132,6 +2176,7 @@ function OrderDetail({
   userCanAnnulOrders,
   userCanEditOrders,
   trackingDraft,
+  trackingSaveMessage,
   onAddComment,
   onAnnulOrder,
   onEditOrder,
@@ -2203,6 +2248,7 @@ function OrderDetail({
           <ShieldCheck size={18} />
           Guardar tracking
         </button>
+        {trackingSaveMessage ? <p className="save-message">{trackingSaveMessage}</p> : null}
         {!userCanEditOrders ? (
           <p className="permission-note">Solo Administrador u Operaciones pueden editar esta orden.</p>
         ) : null}
