@@ -1035,7 +1035,10 @@ h3 {
 
 .modal-panel {
   width: min(980px, 100%);
-  max-height: min(900px, calc(100vh - 48px));
+  height: min(900px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1045,6 +1048,7 @@ h3 {
 
 .modal-header {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
@@ -1060,8 +1064,19 @@ h3 {
 }
 
 .modal-form {
-  max-height: calc(100vh - 178px);
-  overflow: auto;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .form-section {
@@ -1094,6 +1109,7 @@ h3 {
 
 .modal-footer {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   gap: 10px;
   padding: 16px 20px;
@@ -1370,6 +1386,11 @@ h3 {
 
   .modal-backdrop {
     padding: 10px;
+  }
+
+  .modal-panel {
+    height: calc(100dvh - 20px);
+    max-height: calc(100dvh - 20px);
   }
 
   .modal-footer {
