@@ -23,6 +23,7 @@ import {
   Truck,
   Upload,
   UserRound,
+  X,
 } from "lucide-react";
 import {
   Bar,
@@ -94,6 +95,60 @@ const emptyReportFilters = {
   deliveredOnly: false,
   incidentsOnly: false,
 };
+
+const defaultNewOrderForm = {
+  type: "Exportación",
+  shipDate: "",
+  consignor: "",
+  recipient: "",
+  country: "",
+  office: "",
+  destinationAddress: "",
+  pickupAddress:
+    "Ministerio de Relaciones Exteriores, Av. Independencia #752, Estancia San Gerónimo, Santo Domingo, República Dominicana",
+  priority: "Normal",
+  packages: "1 paquete",
+  weight: "",
+  content: "",
+  securityCode: "",
+  evidenceUrl: "",
+  tracking: "",
+  responsible: "Operaciones MIREX",
+  status: "Nueva solicitud",
+  internalComment: "",
+};
+
+const destinationSuggestions = [
+  "Guadalupe",
+  "Estados Unidos",
+  "España",
+  "Francia",
+  "Panamá",
+  "Colombia",
+  "México",
+  "Chile",
+  "Argentina",
+  "Italia",
+  "Alemania",
+  "República Dominicana",
+];
+
+const officeSuggestions = [
+  "Embajada Dominicana en España",
+  "Consulado General en Nueva York",
+  "Consulado General en Guadalupe",
+  "Embajada Dominicana en Francia",
+  "Embajada Dominicana en Panamá",
+  "Consulado General en Miami",
+  "Embajada Dominicana en Colombia",
+  "Embajada Dominicana en México",
+  "Oficina Regional MIREX Santiago",
+];
+
+function getLocalDateTimeValue(date = new Date()) {
+  const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return adjusted.toISOString().slice(0, 16);
+}
 
 function formatDate(value, options = {}) {
   if (!value || value === "Por definir" || value === "Pendiente de resolución") return value || "No disponible";
@@ -228,13 +283,14 @@ function SelectField({ label, value, onChange, options }) {
   );
 }
 
-function TextField({ label, value, onChange, placeholder = "", type = "text" }) {
+function TextField({ label, value, onChange, placeholder = "", required = false, type = "text" }) {
   return (
     <label className="field">
       <span>{label}</span>
       <input
         type={type}
         value={value}
+        required={required}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -266,6 +322,11 @@ function App() {
   const [newComment, setNewComment] = useState("");
   const [trackingDraft, setTrackingDraft] = useState(initialOrders[0].tracking);
   const [lookupMessage, setLookupMessage] = useState("");
+  const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
+  const [newOrderForm, setNewOrderForm] = useState(() => ({
+    ...defaultNewOrderForm,
+    shipDate: getLocalDateTimeValue(),
+  }));
 
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) || orders[0];
 
@@ -568,6 +629,115 @@ function App() {
     setLookupMessage(`Consulta simulada completada para ${knownTracking}.`);
   }
 
+  function openNewOrderModal() {
+    setNewOrderForm({
+      ...defaultNewOrderForm,
+      shipDate: getLocalDateTimeValue(),
+    });
+    setIsNewOrderOpen(true);
+  }
+
+  function updateNewOrderForm(key, value) {
+    setNewOrderForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function createOrder(event) {
+    event.preventDefault();
+    const now = new Date().toISOString();
+    const currentYear = new Date().getFullYear();
+    const nextNumber =
+      Math.max(
+        0,
+        ...orders.map((order) => Number(order.id.match(/(\d+)$/)?.[1] || 0)),
+      ) + 1;
+    const id = `MIREX-${currentYear}-${String(nextNumber).padStart(4, "0")}`;
+    const status = newOrderForm.tracking && newOrderForm.status === "Nueva solicitud"
+      ? "Guía DHL generada"
+      : newOrderForm.status;
+    const shipDate = newOrderForm.shipDate
+      ? new Date(newOrderForm.shipDate).toISOString()
+      : now;
+
+    const createdOrder = {
+      id,
+      securityCode: newOrderForm.securityCode.trim() || "Pendiente",
+      type: newOrderForm.type,
+      country: newOrderForm.country.trim(),
+      office: newOrderForm.office.trim(),
+      consignor: newOrderForm.consignor.trim(),
+      recipient: newOrderForm.recipient.trim(),
+      createdAt: now,
+      shipDate,
+      priority: newOrderForm.priority,
+      status,
+      tracking: newOrderForm.tracking.trim(),
+      responsible: newOrderForm.responsible,
+      updatedAt: now,
+      destinationAddress: newOrderForm.destinationAddress.trim(),
+      pickupAddress: newOrderForm.pickupAddress.trim(),
+      packages: newOrderForm.packages.trim(),
+      weight: newOrderForm.weight.trim() || "Por definir",
+      content: newOrderForm.content.trim(),
+      evidenceUrl: newOrderForm.evidenceUrl.trim() || "Pendiente de evidencia",
+      comments: newOrderForm.internalComment.trim()
+        ? [
+            {
+              author: role,
+              text: newOrderForm.internalComment.trim(),
+              date: now,
+            },
+          ]
+        : [],
+      history: [
+        {
+          date: now,
+          status: "Solicitud creada",
+          source: "Captura manual",
+          note: "Orden creada desde el prototipo centralizado.",
+        },
+        {
+          date: now,
+          status: "Tarea generada en Asana",
+          source: "Asana API preparada",
+          note: "En producción se crearía o sincronizaría la tarea operativa.",
+        },
+        {
+          date: now,
+          status,
+          source: role,
+          note: "Estado inicial registrado desde Nueva orden.",
+        },
+      ],
+      trackingInfo: {
+        currentStatus: newOrderForm.tracking.trim()
+          ? "Guía DHL generada"
+          : status === "Pendiente de guía DHL"
+            ? "Sin guía generada"
+            : status,
+        lastLocation: newOrderForm.pickupAddress.trim() || "MIREX Santo Domingo",
+        eta: "Por definir",
+        events: newOrderForm.tracking.trim()
+          ? [
+              {
+                date: now,
+                location: "Santo Domingo",
+                status: "Información del envío recibida",
+              },
+            ]
+          : [],
+      },
+    };
+
+    setOrders((current) => [createdOrder, ...current]);
+    setSelectedOrderId(id);
+    setTrackingDraft(createdOrder.tracking);
+    setLookupMessage("");
+    setQuery("");
+    setFilters(emptyFilters);
+    setActiveView("orders");
+    setIsNewOrderOpen(false);
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -619,7 +789,7 @@ function App() {
             <button className="icon-button" title="Subir evidencia">
               <Upload size={18} />
             </button>
-            <button className="primary-action">
+            <button className="primary-action" onClick={openNewOrderModal}>
               <FileText size={18} />
               Nueva orden
             </button>
@@ -669,6 +839,207 @@ function App() {
           />
         )}
       </main>
+
+      {isNewOrderOpen ? (
+        <NewOrderModal
+          form={newOrderForm}
+          onChange={updateNewOrderForm}
+          onClose={() => setIsNewOrderOpen(false)}
+          onSubmit={createOrder}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function NewOrderModal({ form, onChange, onClose, onSubmit }) {
+  return (
+    <div className="modal-backdrop">
+      <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="new-order-title">
+        <header className="modal-header">
+          <div>
+            <span className="eyebrow">Captura operativa</span>
+            <h2 id="new-order-title">Nueva orden MIREX</h2>
+            <p>
+              Registra la solicitud y deja lista la trazabilidad inicial para operaciones.
+            </p>
+          </div>
+          <button className="icon-button" type="button" title="Cerrar" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <form className="modal-form" onSubmit={onSubmit}>
+          <datalist id="destination-suggestions">
+            {destinationSuggestions.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
+          <datalist id="office-suggestions">
+            {officeSuggestions.map((item) => (
+              <option key={item} value={item} />
+            ))}
+          </datalist>
+
+          <div className="form-section">
+            <h3>Solicitud</h3>
+            <div className="form-grid">
+              <SelectField
+                label="Tipo de solicitud"
+                value={form.type}
+                options={typeOptions}
+                onChange={(value) => onChange("type", value)}
+              />
+              <TextField
+                label="Fecha de envío"
+                type="datetime-local"
+                value={form.shipDate}
+                required
+                onChange={(value) => onChange("shipDate", value)}
+              />
+              <SelectField
+                label="Prioridad"
+                value={form.priority}
+                options={priorityOptions}
+                onChange={(value) => onChange("priority", value)}
+              />
+              <SelectField
+                label="Estado inicial"
+                value={form.status}
+                options={statusOptions}
+                onChange={(value) => onChange("status", value)}
+              />
+              <SelectField
+                label="Responsable"
+                value={form.responsible}
+                options={responsibleOptions}
+                onChange={(value) => onChange("responsible", value)}
+              />
+              <TextField
+                label="Código de seguridad"
+                value={form.securityCode}
+                placeholder="240794"
+                onChange={(value) => onChange("securityCode", value)}
+              />
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>Partes y destino</h3>
+            <div className="form-grid two-columns">
+              <TextField
+                label="Consignatario"
+                value={form.consignor}
+                required
+                placeholder="Nombre, cargo y dependencia"
+                onChange={(value) => onChange("consignor", value)}
+              />
+              <TextField
+                label="Destinatario"
+                value={form.recipient}
+                required
+                placeholder="Nombre, cargo y oficina"
+                onChange={(value) => onChange("recipient", value)}
+              />
+              <label className="field">
+                <span>País / destino</span>
+                <input
+                  required
+                  list="destination-suggestions"
+                  value={form.country}
+                  placeholder="Guadalupe"
+                  onChange={(event) => onChange("country", event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Embajada / consulado / oficina</span>
+                <input
+                  required
+                  list="office-suggestions"
+                  value={form.office}
+                  placeholder="Consulado General en Guadalupe"
+                  onChange={(event) => onChange("office", event.target.value)}
+                />
+              </label>
+              <label className="field span-2">
+                <span>Dirección completa de destino</span>
+                <textarea
+                  required
+                  value={form.destinationAddress}
+                  placeholder="Dirección física, ciudad, código postal y país"
+                  onChange={(event) => onChange("destinationAddress", event.target.value)}
+                />
+              </label>
+              <label className="field span-2">
+                <span>Dirección de recogida</span>
+                <textarea
+                  required
+                  value={form.pickupAddress}
+                  onChange={(event) => onChange("pickupAddress", event.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>Paquete y evidencia</h3>
+            <div className="form-grid">
+              <TextField
+                label="Cantidad de paquetes"
+                value={form.packages}
+                required
+                placeholder="1 paquete"
+                onChange={(value) => onChange("packages", value)}
+              />
+              <TextField
+                label="Peso aproximado"
+                value={form.weight}
+                placeholder="0.60 libras"
+                onChange={(value) => onChange("weight", value)}
+              />
+              <TextField
+                label="Tracking DHL"
+                value={form.tracking}
+                placeholder="JD014600..."
+                onChange={(value) => onChange("tracking", value)}
+              />
+              <TextField
+                label="Evidencia / Google Drive"
+                value={form.evidenceUrl}
+                placeholder="https://drive.google.com/..."
+                onChange={(value) => onChange("evidenceUrl", value)}
+              />
+              <label className="field span-2">
+                <span>Contenido declarado</span>
+                <textarea
+                  required
+                  value={form.content}
+                  placeholder="Documentos oficiales, libretas de pasaporte, expedientes..."
+                  onChange={(event) => onChange("content", event.target.value)}
+                />
+              </label>
+              <label className="field span-2">
+                <span>Comentario interno inicial</span>
+                <textarea
+                  value={form.internalComment}
+                  placeholder="Validaciones, observaciones de recogida o instrucciones especiales"
+                  onChange={(event) => onChange("internalComment", event.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+
+          <footer className="modal-footer">
+            <button className="ghost-button" type="button" onClick={onClose}>
+              Cancelar
+            </button>
+            <button className="primary-action" type="submit">
+              <FileText size={18} />
+              Crear orden
+            </button>
+          </footer>
+        </form>
+      </section>
     </div>
   );
 }
