@@ -28,4 +28,13 @@ Cuando Pages este activo para este repositorio, el demo quedara disponible en:
 https://legnarleunam.github.io/web-based-tracking-system-Importadex/
 ```
 
+Para activarlo en GitHub:
+
+1. Entrar al repositorio en GitHub.
+2. Ir a `Settings` > `Pages`.
+3. En `Build and deployment`, seleccionar `Source: GitHub Actions`.
+4. Ir a `Actions` y ejecutar o esperar el workflow `Deploy demo site`.
+
+Si la cuenta no permite GitHub Pages en repositorios privados, cambiar el repositorio a publico o usar una cuenta/organizacion con Pages para repos privados. El CSV local de datos reales esta ignorado por git.
+
 El prototipo no requiere backend. Los puntos de integracion futura estan comentados en el codigo.
