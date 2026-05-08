@@ -133,11 +133,34 @@ function buildMonthlySeries(rows) {
           monthRows.filter((row) => row.type === "Exportación"),
           "requests",
         ),
+        entregadas: sum(monthRows, "delivered"),
+        pendientes: sum(monthRows, "pending"),
         urgentes: sum(monthRows, "urgent"),
         incidencias: sum(monthRows, "incidents"),
+        guiasGeneradas: sum(monthRows, "dhlGenerated"),
+        guiasPendientes: sum(monthRows, "dhlPending"),
       };
     })
     .filter(Boolean);
+}
+
+function reportRowMatchesStatus(row, status) {
+  if (status === "Todos") return true;
+  if (status === "Entregado") return row.delivered > 0;
+  if (status === "Incidencia") return row.incidents > 0;
+  if (status === "Pendiente de guía DHL") return row.dhlPending > 0;
+  if (status === "Guía DHL generada") return row.dhlGenerated > 0;
+  if (["Nueva solicitud", "En revisión", "Recogido por DHL", "En tránsito", "En aduana", "En ruta de entrega"].includes(status)) {
+    return row.pending > 0;
+  }
+  return status !== "Cancelado";
+}
+
+function reportRowMatchesPriority(row, priority) {
+  if (priority === "Todos") return true;
+  if (priority === "Urgente") return row.urgent > 0;
+  if (priority === "Alta") return row.requests - row.urgent > 3;
+  return row.requests - row.urgent > 0;
 }
 
 function groupRows(rows, key, limit = 8) {
@@ -320,6 +343,8 @@ function App() {
         (reportFilters.type === "Todos" || row.type === reportFilters.type) &&
         (reportFilters.country === "Todos" || row.country === reportFilters.country) &&
         (reportFilters.office === "Todos" || row.office === reportFilters.office) &&
+        reportRowMatchesStatus(row, reportFilters.status) &&
+        reportRowMatchesPriority(row, reportFilters.priority) &&
         (reportFilters.responsible === "Todos" || row.responsible === reportFilters.responsible) &&
         (!reportFilters.from || row.lastUpdate >= reportFilters.from) &&
         (!reportFilters.to || row.lastUpdate <= reportFilters.to) &&
@@ -344,6 +369,27 @@ function App() {
           ),
         }))
         .filter((item) => item.value > 0),
+    [filteredReports],
+  );
+  const deliveryByType = useMemo(
+    () =>
+      ["Importación", "Exportación"]
+        .map((type) => {
+          const rows = filteredReports.filter((row) => row.type === type);
+          return {
+            name: type,
+            promedio: Number(average(rows, "avgDeliveryDays").toFixed(1)),
+          };
+        })
+        .filter((item) => item.promedio > 0),
+    [filteredReports],
+  );
+  const statusDistribution = useMemo(
+    () => [
+      { name: "Entregadas", value: sum(filteredReports, "delivered"), color: "#27845b" },
+      { name: "Pendientes", value: sum(filteredReports, "pending"), color: "#f2b705" },
+      { name: "Incidencias", value: sum(filteredReports, "incidents"), color: "#d71920" },
+    ],
     [filteredReports],
   );
 
@@ -615,6 +661,8 @@ function App() {
             reportKpis={reportKpis}
             reportMonths={reportMonths}
             reportYears={reportYears}
+            statusDistribution={statusDistribution}
+            deliveryByType={deliveryByType}
             typeDistribution={typeDistribution}
             onReset={() => setReportFilters(emptyReportFilters)}
             onUpdateFilter={updateReportFilter}
@@ -1078,6 +1126,8 @@ function ReportsView({
   reportKpis,
   reportMonths,
   reportYears,
+  statusDistribution,
+  deliveryByType,
   typeDistribution,
   onReset,
   onUpdateFilter,
@@ -1218,6 +1268,84 @@ function ReportsView({
               <Tooltip />
               <Bar dataKey="incidencias" fill="#b42318" radius={[4, 4, 0, 0]} />
               <Bar dataKey="urgentes" fill="#e0a100" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+
+        <ChartPanel title="Entregadas vs pendientes" subtitle="Cierre operativo mensual">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={monthlySeries}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="entregadas" stackId="delivery" fill="#27845b" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="pendientes" stackId="delivery" fill="#f2b705" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+
+        <ChartPanel title="Guías DHL" subtitle="Generadas vs pendientes de guía">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={monthlySeries}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="guiasGeneradas" fill="#3f5f8f" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="guiasPendientes" fill="#d71920" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+
+        <ChartPanel title="Solicitudes por estado" subtitle="Entregadas, pendientes e incidencias">
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie
+                data={statusDistribution}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={58}
+                outerRadius={88}
+                paddingAngle={4}
+              >
+                {statusDistribution.map((item) => (
+                  <Cell key={item.name} fill={item.color} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="legend-row">
+            {statusDistribution.map((item) => (
+              <span key={item.name}>
+                <i style={{ backgroundColor: item.color }} />
+                {item.name}: {item.value}
+              </span>
+            ))}
+          </div>
+        </ChartPanel>
+
+        <ChartPanel title="Tiempo promedio por tipo" subtitle="Días promedio de entrega">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={deliveryByType}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="promedio" fill="#007a78" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+
+        <ChartPanel title="Tiempo promedio por país" subtitle="Destinos con mayor tiempo operativo">
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={countryVolume} layout="vertical" margin={{ left: 28 }}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" />
+              <YAxis type="category" dataKey="name" width={92} />
+              <Tooltip />
+              <Bar dataKey="promedioEntrega" fill="#765aa8" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartPanel>
