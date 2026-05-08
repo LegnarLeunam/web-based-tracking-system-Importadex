@@ -16,8 +16,11 @@ Prototipo funcional en React para centralizar el seguimiento de solicitudes de e
 ```bash
 npm install
 npm run dev
+npm run generate:csv-data
 npm run build
 ```
+
+`npm run generate:csv-data` normaliza `Datos/Formulario MIREX.csv` y genera `src/data/csvData.js` para alimentar filtros, ordenes y reportes del prototipo.
 
 ## Demo gratuito
 

@@ -50,22 +50,16 @@ import {
   initialOrders,
   priorityMeta,
   priorityOptions,
-  reportRows,
+  reportRows as baseReportRows,
   responsibleOptions,
   statusMeta,
   statusOptions as defaultStatusOptions,
   typeOptions,
 } from "./data/mockData";
+import { csvCatalogs, csvOrders, csvReportRows } from "./data/csvData";
 
-const monthOrder = [
-  "2025-11",
-  "2025-12",
-  "2026-01",
-  "2026-02",
-  "2026-03",
-  "2026-04",
-  "2026-05",
-];
+const appInitialOrders = [...csvOrders, ...initialOrders];
+const appReportRows = [...csvReportRows, ...baseReportRows];
 
 const typeColors = {
   Exportación: "#d71920",
@@ -200,9 +194,9 @@ const defaultUsers = [
 ];
 
 const defaultCatalogs = {
-  countries: destinationSuggestions,
-  offices: officeSuggestions,
-  statuses: defaultStatusOptions,
+  countries: Array.from(new Set([...destinationSuggestions, ...csvCatalogs.countries])).sort(),
+  offices: Array.from(new Set([...officeSuggestions, ...csvCatalogs.offices])).sort(),
+  statuses: Array.from(new Set([...defaultStatusOptions, ...csvCatalogs.statuses])).sort(),
 };
 
 function readStorage(key, fallback) {
@@ -226,6 +220,14 @@ function stripPassword(user) {
   if (!user) return null;
   const { password, ...safeUser } = user;
   return safeUser;
+}
+
+function mergeCatalogs(catalogs) {
+  return {
+    countries: Array.from(new Set([...(catalogs?.countries || []), ...defaultCatalogs.countries])).sort(),
+    offices: Array.from(new Set([...(catalogs?.offices || []), ...defaultCatalogs.offices])).sort(),
+    statuses: Array.from(new Set([...(catalogs?.statuses || []), ...defaultCatalogs.statuses])).sort(),
+  };
 }
 
 function getLocalDateTimeValue(date = new Date()) {
@@ -255,6 +257,7 @@ function average(items, key) {
 }
 
 function buildMonthlySeries(rows) {
+  const monthOrder = Array.from(new Set(rows.map((row) => row.monthKey))).sort();
   return monthOrder
     .map((monthKey) => {
       const monthRows = rows.filter((row) => row.monthKey === monthKey);
@@ -397,15 +400,17 @@ function CheckboxField({ label, checked, onChange }) {
 function App() {
   const [users, setUsers] = useState(() => readStorage(storageKeys.users, defaultUsers));
   const [authUser, setAuthUser] = useState(() => readStorage(storageKeys.session, null));
-  const [catalogs, setCatalogs] = useState(() => readStorage(storageKeys.catalogs, defaultCatalogs));
-  const [orders, setOrders] = useState(initialOrders);
-  const [selectedOrderId, setSelectedOrderId] = useState(initialOrders[0].id);
+  const [catalogs, setCatalogs] = useState(() =>
+    mergeCatalogs(readStorage(storageKeys.catalogs, defaultCatalogs)),
+  );
+  const [orders, setOrders] = useState(appInitialOrders);
+  const [selectedOrderId, setSelectedOrderId] = useState(appInitialOrders[0].id);
   const [activeView, setActiveView] = useState("orders");
   const [filters, setFilters] = useState(emptyFilters);
   const [reportFilters, setReportFilters] = useState(emptyReportFilters);
   const [query, setQuery] = useState("");
   const [newComment, setNewComment] = useState("");
-  const [trackingDraft, setTrackingDraft] = useState(initialOrders[0].tracking);
+  const [trackingDraft, setTrackingDraft] = useState(appInitialOrders[0].tracking);
   const [lookupMessage, setLookupMessage] = useState("");
   const [isNewOrderOpen, setIsNewOrderOpen] = useState(false);
   const [newOrderForm, setNewOrderForm] = useState(() => ({
@@ -447,20 +452,20 @@ function App() {
   const offices = useMemo(
     () => [
       "Todos",
-      ...Array.from(new Set([...officeCatalog, ...reportRows.map((row) => row.office)])).filter(Boolean).sort(),
+      ...Array.from(new Set([...officeCatalog, ...appReportRows.map((row) => row.office)])).filter(Boolean).sort(),
     ],
     [officeCatalog],
   );
   const reportCountries = useMemo(
     () => [
       "Todos",
-      ...Array.from(new Set([...countryCatalog, ...reportRows.map((row) => row.country)])).filter(Boolean).sort(),
+      ...Array.from(new Set([...countryCatalog, ...appReportRows.map((row) => row.country)])).filter(Boolean).sort(),
     ],
     [countryCatalog],
   );
-  const reportYears = useMemo(() => getUnique(reportRows, "year"), []);
+  const reportYears = useMemo(() => getUnique(appReportRows, "year"), []);
   const reportMonths = useMemo(
-    () => ["Todos", ...Array.from(new Set(reportRows.map((row) => row.monthKey))).sort()],
+    () => ["Todos", ...Array.from(new Set(appReportRows.map((row) => row.monthKey))).sort()],
     [],
   );
 
@@ -548,7 +553,7 @@ function App() {
   }, [filters, orders, query]);
 
   const filteredReports = useMemo(() => {
-    return reportRows.filter((row) => {
+    return appReportRows.filter((row) => {
       return (
         (reportFilters.year === "Todos" || row.year === reportFilters.year) &&
         (reportFilters.month === "Todos" || row.monthKey === reportFilters.month) &&
