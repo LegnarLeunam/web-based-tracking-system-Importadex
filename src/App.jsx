@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Database,
   Download,
   FileText,
   Filter,
@@ -13,16 +14,22 @@ import {
   History,
   LayoutDashboard,
   Link as LinkIcon,
+  LockKeyhole,
+  LogOut,
   MapPin,
   PackageCheck,
   PackageSearch,
   Plane,
+  Plus,
   RefreshCw,
   Search,
+  Settings,
   ShieldCheck,
   Truck,
   Upload,
+  UserPlus,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -46,7 +53,7 @@ import {
   reportRows,
   responsibleOptions,
   statusMeta,
-  statusOptions,
+  statusOptions as defaultStatusOptions,
   typeOptions,
 } from "./data/mockData";
 
@@ -94,6 +101,20 @@ const emptyReportFilters = {
   tracking: "",
   deliveredOnly: false,
   incidentsOnly: false,
+};
+
+const roleOptions = [
+  "Personal MIREX",
+  "Operaciones Importadex / Flypack",
+  "Administrador",
+];
+
+const userStatusOptions = ["Activo", "Pendiente", "Suspendido"];
+
+const storageKeys = {
+  users: "mirex-tracking-users",
+  session: "mirex-tracking-session",
+  catalogs: "mirex-tracking-catalogs",
 };
 
 const defaultNewOrderForm = {
@@ -144,6 +165,68 @@ const officeSuggestions = [
   "Embajada Dominicana en México",
   "Oficina Regional MIREX Santiago",
 ];
+
+const defaultUsers = [
+  {
+    id: "USR-001",
+    name: "Administrador Demo",
+    email: "admin@mirex.local",
+    password: "Admin2026!",
+    role: "Administrador",
+    institution: "Importadex / Flypack",
+    status: "Activo",
+    createdAt: "2026-05-08T08:00:00",
+  },
+  {
+    id: "USR-002",
+    name: "Operaciones MIREX",
+    email: "operacionesmirex@importadex.do",
+    password: "Mirex2026!",
+    role: "Operaciones Importadex / Flypack",
+    institution: "Importadex / Flypack",
+    status: "Activo",
+    createdAt: "2026-05-08T08:05:00",
+  },
+  {
+    id: "USR-003",
+    name: "Usuario MIREX Demo",
+    email: "mirex.demo@mirex.gob.do",
+    password: "Mirex2026!",
+    role: "Personal MIREX",
+    institution: "MIREX",
+    status: "Activo",
+    createdAt: "2026-05-08T08:10:00",
+  },
+];
+
+const defaultCatalogs = {
+  countries: destinationSuggestions,
+  offices: officeSuggestions,
+  statuses: defaultStatusOptions,
+};
+
+function readStorage(key, fallback) {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Frontend prototype: localStorage may be unavailable in private contexts.
+  }
+}
+
+function stripPassword(user) {
+  if (!user) return null;
+  const { password, ...safeUser } = user;
+  return safeUser;
+}
 
 function getLocalDateTimeValue(date = new Date()) {
   const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -312,13 +395,15 @@ function CheckboxField({ label, checked, onChange }) {
 }
 
 function App() {
+  const [users, setUsers] = useState(() => readStorage(storageKeys.users, defaultUsers));
+  const [authUser, setAuthUser] = useState(() => readStorage(storageKeys.session, null));
+  const [catalogs, setCatalogs] = useState(() => readStorage(storageKeys.catalogs, defaultCatalogs));
   const [orders, setOrders] = useState(initialOrders);
   const [selectedOrderId, setSelectedOrderId] = useState(initialOrders[0].id);
   const [activeView, setActiveView] = useState("orders");
   const [filters, setFilters] = useState(emptyFilters);
   const [reportFilters, setReportFilters] = useState(emptyReportFilters);
   const [query, setQuery] = useState("");
-  const [role, setRole] = useState("Operaciones Importadex / Flypack");
   const [newComment, setNewComment] = useState("");
   const [trackingDraft, setTrackingDraft] = useState(initialOrders[0].tracking);
   const [lookupMessage, setLookupMessage] = useState("");
@@ -327,17 +412,83 @@ function App() {
     ...defaultNewOrderForm,
     shipDate: getLocalDateTimeValue(),
   }));
+  const [authMode, setAuthMode] = useState("login");
+  const [authMessage, setAuthMessage] = useState("");
+  const [loginForm, setLoginForm] = useState({
+    email: "admin@mirex.local",
+    password: "Admin2026!",
+  });
+  const [registerForm, setRegisterForm] = useState({
+    name: "",
+    email: "",
+    password: "",
+    institution: "MIREX",
+  });
+  const [newCatalogItems, setNewCatalogItems] = useState({
+    countries: "",
+    offices: "",
+    statuses: "",
+  });
 
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) || orders[0];
+  const role = authUser?.role || "Personal MIREX";
+  const statusOptions = catalogs.statuses;
+  const countryCatalog = catalogs.countries;
+  const officeCatalog = catalogs.offices;
+  const userCanMaintain = role === "Administrador";
 
-  const countries = useMemo(() => getUnique(orders, "country"), [orders]);
-  const offices = useMemo(() => getUnique(reportRows, "office"), []);
-  const reportCountries = useMemo(() => getUnique(reportRows, "country"), []);
+  const countries = useMemo(
+    () => [
+      "Todos",
+      ...Array.from(new Set([...countryCatalog, ...orders.map((order) => order.country)])).filter(Boolean).sort(),
+    ],
+    [countryCatalog, orders],
+  );
+  const offices = useMemo(
+    () => [
+      "Todos",
+      ...Array.from(new Set([...officeCatalog, ...reportRows.map((row) => row.office)])).filter(Boolean).sort(),
+    ],
+    [officeCatalog],
+  );
+  const reportCountries = useMemo(
+    () => [
+      "Todos",
+      ...Array.from(new Set([...countryCatalog, ...reportRows.map((row) => row.country)])).filter(Boolean).sort(),
+    ],
+    [countryCatalog],
+  );
   const reportYears = useMemo(() => getUnique(reportRows, "year"), []);
   const reportMonths = useMemo(
     () => ["Todos", ...Array.from(new Set(reportRows.map((row) => row.monthKey))).sort()],
     [],
   );
+
+  useEffect(() => {
+    writeStorage(storageKeys.users, users);
+  }, [users]);
+
+  useEffect(() => {
+    writeStorage(storageKeys.catalogs, catalogs);
+  }, [catalogs]);
+
+  useEffect(() => {
+    if (authUser) {
+      writeStorage(storageKeys.session, authUser);
+    } else {
+      try {
+        window.localStorage.removeItem(storageKeys.session);
+      } catch {
+        // Frontend prototype: localStorage may be unavailable in private contexts.
+      }
+    }
+  }, [authUser]);
+
+  useEffect(() => {
+    if (activeView === "maintenance" && !userCanMaintain) {
+      setActiveView("orders");
+    }
+  }, [activeView, userCanMaintain]);
 
   const metrics = useMemo(() => {
     const open = orders.filter(
@@ -629,6 +780,99 @@ function App() {
     setLookupMessage(`Consulta simulada completada para ${knownTracking}.`);
   }
 
+  function handleLogin(event) {
+    event.preventDefault();
+    const email = loginForm.email.trim().toLowerCase();
+    const user = users.find((item) => item.email.toLowerCase() === email);
+
+    if (!user || user.password !== loginForm.password) {
+      setAuthMessage("Correo o contraseña incorrectos.");
+      return;
+    }
+
+    if (user.status !== "Activo") {
+      setAuthMessage(`Tu usuario está ${user.status.toLowerCase()}. Contacta al administrador.`);
+      return;
+    }
+
+    setAuthUser(stripPassword(user));
+    setAuthMessage("");
+    setActiveView("orders");
+  }
+
+  function handleRegister(event) {
+    event.preventDefault();
+    const email = registerForm.email.trim().toLowerCase();
+
+    if (users.some((user) => user.email.toLowerCase() === email)) {
+      setAuthMessage("Ya existe un usuario registrado con ese correo.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const user = {
+      id: `USR-${String(users.length + 1).padStart(3, "0")}`,
+      name: registerForm.name.trim(),
+      email,
+      password: registerForm.password,
+      role: "Personal MIREX",
+      institution: registerForm.institution.trim() || "MIREX",
+      status: "Activo",
+      createdAt: now,
+    };
+
+    setUsers((current) => [...current, user]);
+    setAuthUser(stripPassword(user));
+    setAuthMessage("");
+    setActiveView("orders");
+  }
+
+  function logout() {
+    setAuthUser(null);
+    setAuthMode("login");
+    setAuthMessage("");
+  }
+
+  function updateUser(userId, key, value) {
+    setUsers((current) =>
+      current.map((user) => (user.id === userId ? { ...user, [key]: value } : user)),
+    );
+    if (authUser?.id === userId) {
+      setAuthUser((current) => (current ? { ...current, [key]: value } : current));
+    }
+  }
+
+  function removeUser(userId) {
+    setUsers((current) => current.filter((user) => user.id !== userId));
+  }
+
+  function addCatalogItem(kind) {
+    const value = newCatalogItems[kind].trim();
+    if (!value) return;
+
+    setCatalogs((current) => {
+      if (current[kind].some((item) => item.toLowerCase() === value.toLowerCase())) {
+        return current;
+      }
+      return {
+        ...current,
+        [kind]: [...current[kind], value].sort(),
+      };
+    });
+    setNewCatalogItems((current) => ({ ...current, [kind]: "" }));
+  }
+
+  function removeCatalogItem(kind, value) {
+    setCatalogs((current) => ({
+      ...current,
+      [kind]: current[kind].filter((item) => item !== value),
+    }));
+  }
+
+  function updateCatalogDraft(kind, value) {
+    setNewCatalogItems((current) => ({ ...current, [kind]: value }));
+  }
+
   function openNewOrderModal() {
     setNewOrderForm({
       ...defaultNewOrderForm,
@@ -738,6 +982,29 @@ function App() {
     setIsNewOrderOpen(false);
   }
 
+  if (!authUser) {
+    return (
+      <AuthScreen
+        authMessage={authMessage}
+        loginForm={loginForm}
+        mode={authMode}
+        registerForm={registerForm}
+        onLogin={handleLogin}
+        onLoginChange={(key, value) =>
+          setLoginForm((current) => ({ ...current, [key]: value }))
+        }
+        onModeChange={(mode) => {
+          setAuthMode(mode);
+          setAuthMessage("");
+        }}
+        onRegister={handleRegister}
+        onRegisterChange={(key, value) =>
+          setRegisterForm((current) => ({ ...current, [key]: value }))
+        }
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -764,18 +1031,30 @@ function App() {
             <BarChart3 size={18} />
             Reportes
           </button>
+          {userCanMaintain ? (
+            <button
+              className={activeView === "maintenance" ? "active" : ""}
+              onClick={() => setActiveView("maintenance")}
+            >
+              <Settings size={18} />
+              Mantenimiento
+            </button>
+          ) : null}
         </nav>
 
         <div className="role-panel">
-          <span>Rol activo</span>
-          <select value={role} onChange={(event) => setRole(event.target.value)}>
-            <option>Personal MIREX</option>
-            <option>Operaciones Importadex / Flypack</option>
-            <option>Administrador</option>
-          </select>
+          <span>Sesión activa</span>
+          <strong>{authUser.name}</strong>
+          <Badge tone={role === "Administrador" ? "indigo" : role === "Operaciones Importadex / Flypack" ? "teal" : "blue"}>
+            {role}
+          </Badge>
           <p>
-            Acceso contextual para consultar, comentar, actualizar estados y preparar cierre operativo.
+            Acceso controlado por usuario para consultar, comentar, actualizar estados y mantener catálogos.
           </p>
+          <button className="ghost-button full" onClick={logout}>
+            <LogOut size={16} />
+            Cerrar sesión
+          </button>
         </div>
       </aside>
 
@@ -818,8 +1097,9 @@ function App() {
             onSimulateLookup={simulateDhlLookup}
             onUpdateFilter={updateFilter}
             onUpdateStatus={updateOrderStatus}
+            statusOptions={statusOptions}
           />
-        ) : (
+        ) : activeView === "reports" ? (
           <ReportsView
             countryVolume={countryVolume}
             filteredReports={filteredReports}
@@ -836,6 +1116,19 @@ function App() {
             typeDistribution={typeDistribution}
             onReset={() => setReportFilters(emptyReportFilters)}
             onUpdateFilter={updateReportFilter}
+            statusOptions={statusOptions}
+          />
+        ) : (
+          <MaintenanceView
+            catalogs={catalogs}
+            currentUser={authUser}
+            newCatalogItems={newCatalogItems}
+            users={users}
+            onAddCatalogItem={addCatalogItem}
+            onCatalogDraftChange={updateCatalogDraft}
+            onRemoveCatalogItem={removeCatalogItem}
+            onRemoveUser={removeUser}
+            onUpdateUser={updateUser}
           />
         )}
       </main>
@@ -843,6 +1136,9 @@ function App() {
       {isNewOrderOpen ? (
         <NewOrderModal
           form={newOrderForm}
+          officeOptions={officeCatalog}
+          statusOptions={statusOptions}
+          countryOptions={countryCatalog}
           onChange={updateNewOrderForm}
           onClose={() => setIsNewOrderOpen(false)}
           onSubmit={createOrder}
@@ -852,7 +1148,356 @@ function App() {
   );
 }
 
-function NewOrderModal({ form, onChange, onClose, onSubmit }) {
+function AuthScreen({
+  authMessage,
+  loginForm,
+  mode,
+  registerForm,
+  onLogin,
+  onLoginChange,
+  onModeChange,
+  onRegister,
+  onRegisterChange,
+}) {
+  const demoAccounts = [
+    {
+      label: "Administrador",
+      email: "admin@mirex.local",
+      password: "Admin2026!",
+    },
+    {
+      label: "Operaciones",
+      email: "operacionesmirex@importadex.do",
+      password: "Mirex2026!",
+    },
+    {
+      label: "MIREX",
+      email: "mirex.demo@mirex.gob.do",
+      password: "Mirex2026!",
+    },
+  ];
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-hero">
+        <div className="brand-lockup">
+          <div className="brand-mark">MI</div>
+          <div>
+            <strong>MIREX Tracking</strong>
+            <span>Importadex / Flypack</span>
+          </div>
+        </div>
+        <div>
+          <span className="eyebrow">Acceso seguro de prototipo</span>
+          <h1>Centro de trazabilidad para solicitudes oficiales</h1>
+          <p>
+            Inicia sesión para consultar órdenes, actualizar estados, revisar reportes y mantener usuarios o catálogos maestros.
+          </p>
+        </div>
+        <div className="auth-feature-grid">
+          <div>
+            <LockKeyhole size={20} />
+            <strong>Sesión controlada</strong>
+            <span>Usuarios con rol operativo o administrativo.</span>
+          </div>
+          <div>
+            <Users size={20} />
+            <strong>Registro interno</strong>
+            <span>Nuevos usuarios quedan disponibles para gestión.</span>
+          </div>
+          <div>
+            <Database size={20} />
+            <strong>Mantenimientos</strong>
+            <span>Países, estados y oficinas editables.</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="auth-card">
+        <div className="auth-tabs">
+          <button className={mode === "login" ? "active" : ""} onClick={() => onModeChange("login")}>
+            <LockKeyhole size={16} />
+            Iniciar sesión
+          </button>
+          <button className={mode === "register" ? "active" : ""} onClick={() => onModeChange("register")}>
+            <UserPlus size={16} />
+            Registro
+          </button>
+        </div>
+
+        {mode === "login" ? (
+          <form className="auth-form" onSubmit={onLogin}>
+            <h2>Inicio de sesión</h2>
+            <TextField
+              label="Correo"
+              type="email"
+              value={loginForm.email}
+              required
+              placeholder="usuario@mirex.gob.do"
+              onChange={(value) => onLoginChange("email", value)}
+            />
+            <TextField
+              label="Contraseña"
+              type="password"
+              value={loginForm.password}
+              required
+              placeholder="Contraseña"
+              onChange={(value) => onLoginChange("password", value)}
+            />
+            {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+            <button className="primary-action full" type="submit">
+              <LockKeyhole size={18} />
+              Entrar
+            </button>
+            <div className="demo-accounts">
+              <span>Accesos demo</span>
+              {demoAccounts.map((account) => (
+                <button
+                  key={account.email}
+                  type="button"
+                  onClick={() => {
+                    onLoginChange("email", account.email);
+                    onLoginChange("password", account.password);
+                  }}
+                >
+                  {account.label}
+                </button>
+              ))}
+            </div>
+          </form>
+        ) : (
+          <form className="auth-form" onSubmit={onRegister}>
+            <h2>Registro de usuario</h2>
+            <TextField
+              label="Nombre completo"
+              value={registerForm.name}
+              required
+              placeholder="Nombre y apellido"
+              onChange={(value) => onRegisterChange("name", value)}
+            />
+            <TextField
+              label="Correo institucional"
+              type="email"
+              value={registerForm.email}
+              required
+              placeholder="usuario@mirex.gob.do"
+              onChange={(value) => onRegisterChange("email", value)}
+            />
+            <TextField
+              label="Contraseña"
+              type="password"
+              value={registerForm.password}
+              required
+              placeholder="Mínimo 8 caracteres"
+              onChange={(value) => onRegisterChange("password", value)}
+            />
+            <TextField
+              label="Institución / área"
+              value={registerForm.institution}
+              required
+              placeholder="MIREX, Importadex, Flypack..."
+              onChange={(value) => onRegisterChange("institution", value)}
+            />
+            {authMessage ? <p className="auth-message">{authMessage}</p> : null}
+            <button className="primary-action full" type="submit">
+              <UserPlus size={18} />
+              Crear usuario
+            </button>
+            <p className="auth-note">
+              El rol inicial es Personal MIREX. Un administrador puede cambiarlo en Mantenimiento.
+            </p>
+          </form>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function MaintenanceView({
+  catalogs,
+  currentUser,
+  newCatalogItems,
+  users,
+  onAddCatalogItem,
+  onCatalogDraftChange,
+  onRemoveCatalogItem,
+  onRemoveUser,
+  onUpdateUser,
+}) {
+  return (
+    <section className="maintenance-view">
+      <div className="report-hero">
+        <div>
+          <span className="eyebrow">Módulo administrativo</span>
+          <h2>Mantenimiento del sistema</h2>
+          <p>
+            Gestiona usuarios registrados, roles, estados de acceso y catálogos usados por órdenes y reportes.
+          </p>
+        </div>
+        <Badge tone="indigo">Solo administrador</Badge>
+      </div>
+
+      <section className="maintenance-grid">
+        <IconStat icon={Users} label="Usuarios registrados" value={users.length} tone="neutral" />
+        <IconStat icon={ShieldCheck} label="Usuarios activos" value={users.filter((user) => user.status === "Activo").length} tone="success" />
+        <IconStat icon={Globe2} label="Países destino" value={catalogs.countries.length} tone="teal" />
+        <IconStat icon={Database} label="Estados operativos" value={catalogs.statuses.length} tone="gold" />
+      </section>
+
+      <section className="maintenance-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Seguridad y roles</span>
+            <h2>Usuarios registrados</h2>
+          </div>
+        </div>
+        <div className="table-shell">
+          <table className="orders-table users-table">
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Correo</th>
+                <th>Institución</th>
+                <th>Rol</th>
+                <th>Estado</th>
+                <th>Creación</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    <strong>{user.name}</strong>
+                    <span className="muted-cell">{user.id}</span>
+                  </td>
+                  <td>{user.email}</td>
+                  <td>{user.institution}</td>
+                  <td>
+                    <select
+                      className="status-select"
+                      value={user.role}
+                      onChange={(event) => onUpdateUser(user.id, "role", event.target.value)}
+                    >
+                      {roleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="status-select"
+                      value={user.status}
+                      onChange={(event) => onUpdateUser(user.id, "status", event.target.value)}
+                      disabled={user.id === currentUser.id}
+                    >
+                      {userStatusOptions.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>{formatDate(user.createdAt)}</td>
+                  <td>
+                    <button
+                      className="ghost-button"
+                      disabled={user.id === currentUser.id}
+                      onClick={() => onRemoveUser(user.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="catalog-grid">
+        <CatalogManager
+          icon={Globe2}
+          items={catalogs.countries}
+          label="País destino"
+          pluralLabel="Países destino"
+          value={newCatalogItems.countries}
+          onAdd={() => onAddCatalogItem("countries")}
+          onChange={(value) => onCatalogDraftChange("countries", value)}
+          onRemove={(value) => onRemoveCatalogItem("countries", value)}
+        />
+        <CatalogManager
+          icon={ShieldCheck}
+          items={catalogs.statuses}
+          label="Estado operativo"
+          pluralLabel="Estados"
+          value={newCatalogItems.statuses}
+          onAdd={() => onAddCatalogItem("statuses")}
+          onChange={(value) => onCatalogDraftChange("statuses", value)}
+          onRemove={(value) => onRemoveCatalogItem("statuses", value)}
+        />
+        <CatalogManager
+          icon={MapPin}
+          items={catalogs.offices}
+          label="Embajada / Consulado"
+          pluralLabel="Embajadas y consulados"
+          value={newCatalogItems.offices}
+          onAdd={() => onAddCatalogItem("offices")}
+          onChange={(value) => onCatalogDraftChange("offices", value)}
+          onRemove={(value) => onRemoveCatalogItem("offices", value)}
+        />
+      </section>
+    </section>
+  );
+}
+
+function CatalogManager({ icon: Icon, items, label, pluralLabel, value, onAdd, onChange, onRemove }) {
+  return (
+    <article className="catalog-panel">
+      <div className="catalog-heading">
+        <div>
+          <Icon size={18} />
+          <h3>{pluralLabel}</h3>
+        </div>
+        <Badge tone="blue-soft">{items.length}</Badge>
+      </div>
+      <div className="catalog-add">
+        <TextField
+          label={`Agregar ${label}`}
+          value={value}
+          placeholder={label}
+          onChange={onChange}
+        />
+        <button className="secondary-action" onClick={onAdd}>
+          <Plus size={16} />
+          Agregar
+        </button>
+      </div>
+      <div className="catalog-list">
+        {items.map((item) => (
+          <span key={item} className="catalog-chip">
+            {item}
+            <button type="button" onClick={() => onRemove(item)} aria-label={`Eliminar ${item}`}>
+              <X size={13} />
+            </button>
+          </span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function NewOrderModal({
+  countryOptions,
+  form,
+  officeOptions,
+  statusOptions,
+  onChange,
+  onClose,
+  onSubmit,
+}) {
   return (
     <div className="modal-backdrop">
       <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="new-order-title">
@@ -871,12 +1516,12 @@ function NewOrderModal({ form, onChange, onClose, onSubmit }) {
 
         <form className="modal-form" onSubmit={onSubmit}>
           <datalist id="destination-suggestions">
-            {destinationSuggestions.map((item) => (
+            {countryOptions.map((item) => (
               <option key={item} value={item} />
             ))}
           </datalist>
           <datalist id="office-suggestions">
-            {officeSuggestions.map((item) => (
+            {officeOptions.map((item) => (
               <option key={item} value={item} />
             ))}
           </datalist>
@@ -1051,6 +1696,7 @@ function OrdersView({
   metrics,
   query,
   selectedOrder,
+  statusOptions,
   trackingDraft,
   lookupMessage,
   newComment,
@@ -1233,6 +1879,7 @@ function OrdersView({
           lookupMessage={lookupMessage}
           newComment={newComment}
           order={selectedOrder}
+          statusOptions={statusOptions}
           trackingDraft={trackingDraft}
           onAddComment={onAddComment}
           onSaveTracking={onSaveTracking}
@@ -1250,6 +1897,7 @@ function OrderDetail({
   lookupMessage,
   newComment,
   order,
+  statusOptions,
   trackingDraft,
   onAddComment,
   onSaveTracking,
@@ -1488,6 +2136,7 @@ function Timeline({ history }) {
 
 function ReportsView({
   countryVolume,
+  statusOptions,
   filteredReports,
   monthlySeries,
   officeVolume,
