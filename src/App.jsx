@@ -71,6 +71,89 @@ const typeColors = {
 
 const chartPalette = ["#d71920", "#007a78", "#f2b705", "#5b6c9f", "#6f8f54", "#a05d3f"];
 
+const closedStatuses = ["Entregado", "Cancelado"];
+const inTransitStatuses = ["Recogido por DHL", "En tránsito", "En aduana", "En ruta de entrega"];
+const operationalStatusOrder = [
+  "Nueva solicitud",
+  "En revisión",
+  "Pendiente de guía DHL",
+  "Guía DHL generada",
+  "Recogido por DHL",
+  "En tránsito",
+  "En aduana",
+  "En ruta de entrega",
+  "Entregado",
+  "Incidencia",
+  "Cancelado",
+];
+const prioritySortRank = {
+  Urgente: 1,
+  Alta: 2,
+  Normal: 3,
+};
+const statusSortRank = Object.fromEntries(
+  operationalStatusOrder.map((status, index) => [status, index + 1]),
+);
+const textCollator = new Intl.Collator("es", { numeric: true, sensitivity: "base" });
+
+const kpiFilterDefinitions = [
+  {
+    id: "open",
+    metricKey: "open",
+    label: "Solicitudes abiertas",
+    tone: "neutral",
+    icon: PackageSearch,
+  },
+  {
+    id: "urgent",
+    metricKey: "urgent",
+    label: "Urgentes",
+    tone: "warning",
+    icon: AlertTriangle,
+  },
+  {
+    id: "pendingDhl",
+    metricKey: "pendingDhl",
+    label: "Pendientes guía DHL",
+    tone: "gold",
+    icon: FileText,
+  },
+  {
+    id: "inTransit",
+    metricKey: "inTransit",
+    label: "En tránsito",
+    tone: "teal",
+    icon: Plane,
+  },
+  {
+    id: "delivered",
+    metricKey: "delivered",
+    label: "Entregadas",
+    tone: "success",
+    icon: PackageCheck,
+  },
+  {
+    id: "incidents",
+    metricKey: "incidents",
+    label: "Incidencias",
+    tone: "danger",
+    icon: AlertTriangle,
+  },
+];
+
+const sortColumnLabels = {
+  id: "Número de orden",
+  createdAt: "Creación",
+  type: "Tipo",
+  country: "País / destino",
+  office: "Embajada / oficina",
+  priority: "Prioridad",
+  status: "Estado",
+  tracking: "Tracking DHL",
+  responsible: "Responsable",
+  updatedAt: "Última actualización",
+};
+
 const emptyFilters = {
   type: "Todos",
   status: "Todos",
@@ -361,21 +444,207 @@ function groupRows(rows, key, limit = 8) {
     .slice(0, limit);
 }
 
+function orderIsOpen(order) {
+  return !closedStatuses.includes(order.status);
+}
+
+function orderNeedsDhlGuide(order) {
+  return order.status === "Pendiente de guía DHL" || !order.tracking?.trim();
+}
+
+function orderIsInTransit(order) {
+  return inTransitStatuses.includes(order.status);
+}
+
+function getAverageDeliveryLabel(orders) {
+  const deliveryDurations = orders
+    .filter((order) => order.status === "Entregado")
+    .map((order) => {
+      const createdAt = Date.parse(order.createdAt);
+      const updatedAt = Date.parse(order.updatedAt);
+      if (!createdAt || !updatedAt || updatedAt < createdAt) return null;
+      return (updatedAt - createdAt) / 86400000;
+    })
+    .filter((duration) => duration !== null);
+
+  if (!deliveryDurations.length) return "0.0 días";
+
+  const averageDays = deliveryDurations.reduce((total, duration) => total + duration, 0) / deliveryDurations.length;
+  return `${averageDays.toFixed(1)} días`;
+}
+
+function orderMatchesKpiFilter(order, activeKpiFilter) {
+  if (!activeKpiFilter) return true;
+
+  switch (activeKpiFilter) {
+    case "open":
+      return orderIsOpen(order);
+    case "urgent":
+      return order.priority === "Urgente";
+    case "pendingDhl":
+      return orderNeedsDhlGuide(order);
+    case "inTransit":
+      return orderIsInTransit(order);
+    case "delivered":
+      return order.status === "Entregado";
+    case "incidents":
+      return order.status === "Incidencia";
+    default:
+      return true;
+  }
+}
+
+function getKpiCounts(orders) {
+  return {
+    open: orders.filter(orderIsOpen).length,
+    urgent: orders.filter((order) => order.priority === "Urgente").length,
+    pendingDhl: orders.filter(orderNeedsDhlGuide).length,
+    inTransit: orders.filter(orderIsInTransit).length,
+    delivered: orders.filter((order) => order.status === "Entregado").length,
+    incidents: orders.filter((order) => order.status === "Incidencia").length,
+    avgDelivery: getAverageDeliveryLabel(orders),
+  };
+}
+
+function applyKpiFilter(orders, activeKpiFilter) {
+  return orders.filter((order) => orderMatchesKpiFilter(order, activeKpiFilter));
+}
+
+function applySearchFilter(orders, query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return orders;
+
+  return orders.filter((order) => {
+    const searchable = [
+      order.id,
+      order.securityCode,
+      order.type,
+      order.country,
+      order.office,
+      order.consignor,
+      order.recipient,
+      order.status,
+      order.tracking,
+      order.responsible,
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return searchable.includes(normalizedQuery);
+  });
+}
+
+function applyManualFilters(orders, filters) {
+  return orders.filter((order) => {
+    const created = order.createdAt.slice(0, 10);
+
+    return (
+      (filters.type === "Todos" || order.type === filters.type) &&
+      (filters.status === "Todos" || order.status === filters.status) &&
+      (filters.priority === "Todos" || order.priority === filters.priority) &&
+      (filters.country === "Todos" || order.country === filters.country) &&
+      (filters.responsible === "Todos" || order.responsible === filters.responsible) &&
+      (!filters.from || created >= filters.from) &&
+      (!filters.to || created <= filters.to) &&
+      (!filters.securityCode ||
+        String(order.securityCode || "").toLowerCase().includes(filters.securityCode.toLowerCase())) &&
+      (!filters.tracking ||
+        String(order.tracking || "").toLowerCase().includes(filters.tracking.toLowerCase()))
+    );
+  });
+}
+
+function getOrderSortValue(order, sortKey) {
+  switch (sortKey) {
+    case "createdAt":
+      return Date.parse(order.createdAt) || 0;
+    case "updatedAt":
+      return Date.parse(order.updatedAt) || 0;
+    case "priority":
+      return prioritySortRank[order.priority] || 99;
+    case "status":
+      return statusSortRank[order.status] || 99;
+    case "id":
+      return order.id;
+    case "type":
+      return order.type;
+    case "country":
+      return order.country;
+    case "office":
+      return order.office;
+    case "tracking":
+      return order.tracking || "";
+    case "responsible":
+      return order.responsible;
+    default:
+      return "";
+  }
+}
+
+function compareOrderValues(a, b, sortKey) {
+  const valueA = getOrderSortValue(a, sortKey);
+  const valueB = getOrderSortValue(b, sortKey);
+
+  if (typeof valueA === "number" && typeof valueB === "number") {
+    return valueA - valueB;
+  }
+
+  return textCollator.compare(String(valueA), String(valueB));
+}
+
+function sortOrders(orders, sortConfig) {
+  if (!sortConfig.key) return orders;
+
+  return [...orders].sort((a, b) => {
+    const comparison = compareOrderValues(a, b, sortConfig.key);
+    if (comparison !== 0) {
+      return sortConfig.direction === "asc" ? comparison : -comparison;
+    }
+    return textCollator.compare(a.id, b.id);
+  });
+}
+
 function Badge({ children, tone = "muted", className = "" }) {
   return <span className={`badge badge-${tone} ${className}`}>{children}</span>;
 }
 
-function IconStat({ icon: Icon, label, value, detail, tone = "neutral" }) {
-  return (
-    <section className={`stat-card stat-${tone}`}>
+function IconStat({
+  activeLabel = "Filtro activo",
+  detail,
+  icon: Icon,
+  isActive = false,
+  label,
+  onClick,
+  tone = "neutral",
+  value,
+}) {
+  const content = (
+    <>
       <div className="stat-icon">
         <Icon size={20} />
       </div>
       <div>
         <p>{label}</p>
         <strong>{value}</strong>
+        {isActive ? <em>{activeLabel}</em> : null}
         {detail ? <span>{detail}</span> : null}
       </div>
+    </>
+  );
+
+  const className = `stat-card stat-${tone}${onClick ? " stat-interactive" : ""}${isActive ? " is-active" : ""}`;
+
+  if (onClick) {
+    return (
+      <button type="button" className={className} aria-pressed={isActive} onClick={onClick}>
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <section className={className}>
+      {content}
     </section>
   );
 }
@@ -434,6 +703,8 @@ function App() {
   const [selectedOrderId, setSelectedOrderId] = useState(() => orders[0]?.id || appInitialOrders[0].id);
   const [activeView, setActiveView] = useState("orders");
   const [filters, setFilters] = useState(emptyFilters);
+  const [activeKpiFilter, setActiveKpiFilter] = useState(null);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
   const [reportFilters, setReportFilters] = useState(emptyReportFilters);
   const [query, setQuery] = useState("");
   const [newComment, setNewComment] = useState("");
@@ -532,62 +803,27 @@ function App() {
     }
   }, [activeView, userCanMaintain]);
 
-  const metrics = useMemo(() => {
-    const open = orders.filter(
-      (order) => !["Entregado", "Cancelado"].includes(order.status),
-    );
-    const urgent = orders.filter((order) => order.priority === "Urgente");
-    const delivered = orders.filter((order) => order.status === "Entregado");
-    const incidents = orders.filter((order) => order.status === "Incidencia");
-    const inTransit = orders.filter((order) =>
-      ["Recogido por DHL", "En tránsito", "En aduana", "En ruta de entrega"].includes(order.status),
-    );
-    return {
-      open: open.length,
-      urgent: urgent.length,
-      pendingDhl: orders.filter((order) => order.status === "Pendiente de guía DHL").length,
-      inTransit: inTransit.length,
-      delivered: delivered.length,
-      incidents: incidents.length,
-      avgDelivery: "3.7 días",
-    };
-  }, [orders]);
+  const manuallyFilteredOrders = useMemo(
+    () => applyManualFilters(applySearchFilter(orders, query), filters),
+    [filters, orders, query],
+  );
 
-  const filteredOrders = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return orders.filter((order) => {
-      const created = order.createdAt.slice(0, 10);
-      const searchable = [
-        order.id,
-        order.securityCode,
-        order.type,
-        order.country,
-        order.office,
-        order.consignor,
-        order.recipient,
-        order.status,
-        order.tracking,
-        order.responsible,
-      ]
-        .join(" ")
-        .toLowerCase();
+  const metrics = useMemo(() => getKpiCounts(manuallyFilteredOrders), [manuallyFilteredOrders]);
 
-      return (
-        (!normalizedQuery || searchable.includes(normalizedQuery)) &&
-        (filters.type === "Todos" || order.type === filters.type) &&
-        (filters.status === "Todos" || order.status === filters.status) &&
-        (filters.priority === "Todos" || order.priority === filters.priority) &&
-        (filters.country === "Todos" || order.country === filters.country) &&
-        (filters.responsible === "Todos" || order.responsible === filters.responsible) &&
-        (!filters.from || created >= filters.from) &&
-        (!filters.to || created <= filters.to) &&
-        (!filters.securityCode ||
-          order.securityCode.toLowerCase().includes(filters.securityCode.toLowerCase())) &&
-        (!filters.tracking ||
-          order.tracking.toLowerCase().includes(filters.tracking.toLowerCase()))
-      );
-    });
-  }, [filters, orders, query]);
+  const filteredOrders = useMemo(
+    () => sortOrders(applyKpiFilter(manuallyFilteredOrders, activeKpiFilter), sortConfig),
+    [activeKpiFilter, manuallyFilteredOrders, sortConfig],
+  );
+
+  useEffect(() => {
+    if (activeView !== "orders" || !filteredOrders.length) return;
+    if (filteredOrders.some((order) => order.id === selectedOrderId)) return;
+
+    setSelectedOrderId(filteredOrders[0].id);
+    setTrackingDraft(filteredOrders[0].tracking || "");
+    setTrackingSaveMessage("");
+    setLookupMessage("");
+  }, [activeView, filteredOrders, selectedOrderId]);
 
   const filteredReports = useMemo(() => {
     return appReportRows.filter((row) => {
@@ -676,6 +912,29 @@ function App() {
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function resetOrderFilters() {
+    setFilters(emptyFilters);
+    setQuery("");
+    setActiveKpiFilter(null);
+  }
+
+  function toggleKpiFilter(filterId) {
+    setActiveKpiFilter((current) => (current === filterId ? null : filterId));
+  }
+
+  function updateSort(sortKey) {
+    setSortConfig((current) => {
+      if (current.key === sortKey) {
+        return {
+          key: sortKey,
+          direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return { key: sortKey, direction: "asc" };
+    });
   }
 
   function updateReportFilter(key, value) {
@@ -1283,13 +1542,15 @@ function App() {
 
         {activeView === "orders" ? (
           <OrdersView
+            activeKpiFilter={activeKpiFilter}
+            baseOrdersCount={manuallyFilteredOrders.length}
             countries={countries}
             filters={filters}
             filteredOrders={filteredOrders}
             metrics={metrics}
-            orders={orders}
             query={query}
             selectedOrder={selectedOrder}
+            sortConfig={sortConfig}
             userCanAnnulOrders={userCanAnnulOrders}
             userCanEditOrders={userCanEditOrders}
             trackingDraft={trackingDraft}
@@ -1298,14 +1559,17 @@ function App() {
             newComment={newComment}
             onAddComment={addComment}
             onAnnulOrder={requestAnnulSelectedOrder}
+            onClearKpiFilter={() => setActiveKpiFilter(null)}
             onEditOrder={openEditOrderModal}
             onQueryChange={setQuery}
-            onResetFilters={() => setFilters(emptyFilters)}
+            onResetFilters={resetOrderFilters}
             onSaveTracking={saveTracking}
             onSelectOrder={selectOrder}
             onSetNewComment={setNewComment}
             onSetTrackingDraft={setTrackingDraft}
             onSimulateLookup={simulateDhlLookup}
+            onSortChange={updateSort}
+            onToggleKpiFilter={toggleKpiFilter}
             onUpdateFilter={updateFilter}
             onUpdateStatus={updateOrderStatus}
             statusOptions={statusOptions}
@@ -1953,13 +2217,33 @@ function NewOrderModal({
   );
 }
 
+function SortableHeader({ columnKey, label, onSortChange, sortConfig }) {
+  const isActive = sortConfig.key === columnKey;
+  const directionLabel = isActive && sortConfig.direction === "asc" ? "ascendente" : "descendente";
+
+  return (
+    <th aria-sort={isActive ? (sortConfig.direction === "asc" ? "ascending" : "descending") : "none"}>
+      <button className={`sort-header${isActive ? " active" : ""}`} type="button" onClick={() => onSortChange(columnKey)}>
+        <span>{label}</span>
+        <strong aria-hidden="true">{isActive ? (sortConfig.direction === "asc" ? "↑" : "↓") : "↕"}</strong>
+        <span className="sr-only">
+          {isActive ? `Orden ${directionLabel}.` : "Ordenar columna."}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 function OrdersView({
+  activeKpiFilter,
+  baseOrdersCount,
   countries,
   filters,
   filteredOrders,
   metrics,
   query,
   selectedOrder,
+  sortConfig,
   statusOptions,
   userCanAnnulOrders,
   userCanEditOrders,
@@ -1969,6 +2253,7 @@ function OrdersView({
   newComment,
   onAddComment,
   onAnnulOrder,
+  onClearKpiFilter,
   onEditOrder,
   onQueryChange,
   onResetFilters,
@@ -1977,18 +2262,28 @@ function OrdersView({
   onSetNewComment,
   onSetTrackingDraft,
   onSimulateLookup,
+  onSortChange,
+  onToggleKpiFilter,
   onUpdateFilter,
   onUpdateStatus,
 }) {
+  const activeKpi = kpiFilterDefinitions.find((filter) => filter.id === activeKpiFilter);
+  const activeSortLabel = sortConfig.key ? sortColumnLabels[sortConfig.key] : "";
+
   return (
     <>
       <section className="stats-grid">
-        <IconStat icon={PackageSearch} label="Solicitudes abiertas" value={metrics.open} tone="neutral" />
-        <IconStat icon={AlertTriangle} label="Urgentes" value={metrics.urgent} tone="warning" />
-        <IconStat icon={FileText} label="Pendientes guía DHL" value={metrics.pendingDhl} tone="gold" />
-        <IconStat icon={Plane} label="En tránsito" value={metrics.inTransit} tone="teal" />
-        <IconStat icon={PackageCheck} label="Entregadas" value={metrics.delivered} tone="success" />
-        <IconStat icon={AlertTriangle} label="Incidencias" value={metrics.incidents} tone="danger" />
+        {kpiFilterDefinitions.map((filter) => (
+          <IconStat
+            key={filter.id}
+            icon={filter.icon}
+            isActive={activeKpiFilter === filter.id}
+            label={filter.label}
+            onClick={() => onToggleKpiFilter(filter.id)}
+            tone={filter.tone}
+            value={metrics[filter.metricKey]}
+          />
+        ))}
         <IconStat icon={Clock3} label="Tiempo promedio" value={metrics.avgDelivery} detail="últimos 30 días" tone="neutral" />
       </section>
 
@@ -2003,6 +2298,20 @@ function OrdersView({
               <Filter size={16} />
               Limpiar filtros
             </button>
+          </div>
+
+          <div className="orders-toolbar" aria-live="polite">
+            <p>
+              Mostrando <strong>{filteredOrders.length}</strong> de <strong>{baseOrdersCount}</strong> órdenes
+              {activeKpi ? ` · Filtro rápido: ${activeKpi.label}` : ""}
+              {activeSortLabel ? ` · Orden: ${activeSortLabel} ${sortConfig.direction === "asc" ? "ascendente" : "descendente"}` : ""}
+            </p>
+            {activeKpi ? (
+              <button className="active-filter-chip" type="button" onClick={onClearKpiFilter}>
+                Filtro activo: {activeKpi.label}
+                <X size={14} />
+              </button>
+            ) : null}
           </div>
 
           <div className="search-row">
@@ -2077,18 +2386,19 @@ function OrdersView({
             <table className="orders-table">
               <thead>
                 <tr>
-                  <th>Número de orden</th>
+                  <SortableHeader columnKey="id" label="Número de orden" sortConfig={sortConfig} onSortChange={onSortChange} />
                   <th>Código</th>
-                  <th>Tipo</th>
-                  <th>País / destino</th>
+                  <SortableHeader columnKey="type" label="Tipo" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="country" label="País / destino" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="office" label="Embajada / oficina" sortConfig={sortConfig} onSortChange={onSortChange} />
                   <th>Consignatario</th>
                   <th>Destinatario</th>
-                  <th>Creación</th>
-                  <th>Prioridad</th>
-                  <th>Estado</th>
-                  <th>Tracking DHL</th>
-                  <th>Responsable</th>
-                  <th>Última actualización</th>
+                  <SortableHeader columnKey="createdAt" label="Creación" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="priority" label="Prioridad" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="status" label="Estado" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="tracking" label="Tracking DHL" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="responsible" label="Responsable" sortConfig={sortConfig} onSortChange={onSortChange} />
+                  <SortableHeader columnKey="updatedAt" label="Última actualización" sortConfig={sortConfig} onSortChange={onSortChange} />
                 </tr>
               </thead>
               <tbody>
@@ -2112,8 +2422,8 @@ function OrdersView({
                     </td>
                     <td>
                       <strong>{order.country}</strong>
-                      <span className="muted-cell">{order.office}</span>
                     </td>
+                    <td>{order.office}</td>
                     <td>{order.consignor}</td>
                     <td>{order.recipient}</td>
                     <td>{formatDate(order.createdAt)}</td>
@@ -2140,6 +2450,13 @@ function OrdersView({
                     <td>{formatDate(order.updatedAt)}</td>
                   </tr>
                 ))}
+                {!filteredOrders.length ? (
+                  <tr>
+                    <td className="empty-table-cell" colSpan={13}>
+                      No hay órdenes que coincidan con la búsqueda y filtros actuales.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
